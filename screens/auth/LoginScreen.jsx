@@ -12,6 +12,7 @@ import { AuthContext } from '../../src/navigation/AppNavigator';
 
 import BASE_URL from '../../config';
 import axios from 'axios';
+import AsyncStorage from '@react-native-async-storage/async-storage';
 
 const LoginScreen = () => {
   const [email, setEmail] = useState('');
@@ -25,6 +26,7 @@ const LoginScreen = () => {
       Alert.alert('Error', 'Kripya phone aur password bharein.');
       return;
     }
+    console.log(email, password);
 
     try {
       setLoading(true);
@@ -43,6 +45,9 @@ const LoginScreen = () => {
       );
 
       const token = response.data.token;
+      const user = response.data.user;
+
+      await AsyncStorage.setItem('user', JSON.stringify(user));
       signIn(token);
 
       setLoading(false);

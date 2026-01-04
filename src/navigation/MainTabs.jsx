@@ -3,8 +3,8 @@ import { createBottomTabNavigator } from '@react-navigation/bottom-tabs';
 
 import CustomTabBarIcon from '../../components/CustomTabBarIcon';
 
-import DashboardScreen from '../screens/DashboardScreen';
-import ReportStack from './ReportStack';
+import SurvayFormApp from '../screens/SurvayFormApp';
+import SyncScreen from './SyncScreen';
 import SettingsStack from './SettingsStack';
 
 const Tab = createBottomTabNavigator();
@@ -19,7 +19,7 @@ export default function MainTabs() {
     >
       <Tab.Screen
         name="Dashboard"
-        component={DashboardScreen}
+        component={SurvayFormApp}
         options={{
           tabBarIcon: ({ focused }) => (
             <CustomTabBarIcon route={{ name: 'Home' }} focused={focused} />
@@ -29,7 +29,7 @@ export default function MainTabs() {
 
       <Tab.Screen
         name="Report"
-        component={ReportStack}
+        component={SyncScreen}
         options={{
           tabBarIcon: ({ focused }) => (
             <CustomTabBarIcon route={{ name: 'Report' }} focused={focused} />
