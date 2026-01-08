@@ -1,4 +1,4 @@
-import React, { useState } from 'react';
+import React, { useEffect, useState } from 'react';
 import {
   View,
   Text,
@@ -6,14 +6,23 @@ import {
   TouchableOpacity,
   Alert,
   StyleSheet,
+  ScrollView,
 } from 'react-native';
 import AsyncStorage from '@react-native-async-storage/async-storage';
 import NetInfo from '@react-native-community/netinfo';
 import BASE_URL from '../../config';
 
-const AddArea = ({ onAdded }) => {
+const AddArea = () => {
   const [areaName, setAreaName] = useState('');
   const [loading, setLoading] = useState(false);
+
+  const [areas, setAreas] = useState([]);
+
+  const fetchCachedAreas = async () => {
+    const raw = await AsyncStorage.getItem('cached_areas');
+    const cachedAreas = raw ? JSON.parse(raw) : [];
+    setAreas(cachedAreas);
+  };
 
   const handleAddArea = async () => {
     if (!areaName.trim()) {
@@ -31,7 +40,7 @@ const AddArea = ({ onAdded }) => {
 
       // 🔹 default area object (offline-first)
       const newArea = {
-        id: Date.now().toString(), // temp id
+        id: cachedAreas.length + 1, // temp id
         name: areaName.trim(),
         isSynced: false,
       };
@@ -52,8 +61,22 @@ const AddArea = ({ onAdded }) => {
             newArea.id = json.data.id;
             newArea.isSynced = true;
           }
+
+          Alert.alert('Success', 'Area Added on The Internet!');
         } catch (e) {
           // online fail → offline fallback
+
+          const updated = [...cachedAreas, newArea];
+
+          await AsyncStorage.setItem('cached_areas', JSON.stringify(updated));
+
+          setAreaName('');
+
+          Alert.alert(
+            'Added Offline',
+            'Area Added Locally, connect to internet to sync',
+          );
+          return;
         }
       }
 
@@ -61,10 +84,9 @@ const AddArea = ({ onAdded }) => {
 
       await AsyncStorage.setItem('cached_areas', JSON.stringify(updated));
 
-      onAdded?.(updated); // parent ko fresh list
-
       setAreaName('');
-      Alert.alert('Success', 'Area add ho gaya');
+
+      Alert.alert('Added Sucessfully', 'Area Added Locally!');
     } catch (e) {
       console.log('Add area error', e);
       Alert.alert('Error', 'Area add nahi hua');
@@ -73,9 +95,13 @@ const AddArea = ({ onAdded }) => {
     }
   };
 
+  useEffect(() => {
+    fetchCachedAreas();
+  }, [loading]);
+
   return (
     <View style={styles.box}>
-      <Text style={styles.title}>Add New Area</Text>
+      <Text style={styles.title}>Add New Society</Text>
 
       <TextInput
         value={areaName}
@@ -91,6 +117,12 @@ const AddArea = ({ onAdded }) => {
       >
         <Text style={styles.btnText}>{loading ? 'Saving...' : 'Add Area'}</Text>
       </TouchableOpacity>
+
+      <Text style={styles.title}>All Society</Text>
+
+      {areas?.map(area => (
+        <Text key={area.id}>{area.name}</Text>
+      ))}
     </View>
   );
 };

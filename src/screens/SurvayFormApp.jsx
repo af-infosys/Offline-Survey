@@ -201,7 +201,6 @@ const SurveyFormApp = ({ navigation }) => {
   async function fetchUser() {
     await AsyncStorage.getItem('user').then(user_data => {
       setUser(JSON.parse(user_data));
-      console.log('user_data', user_data);
     });
   }
 
@@ -240,11 +239,18 @@ const SurveyFormApp = ({ navigation }) => {
         setAreas(localAreas);
       }
 
-      const net = await NetInfo.fetch();
-      if (!net.isConnected) return;
-
       // 2️⃣ Offline-added areas (jinme isSynced false hai)
       const unsyncedAreas = localAreas.filter(a => a.isSynced === false);
+
+      const net = await NetInfo.fetch();
+      if (!net.isConnected) {
+        console.log('!!Offline hai');
+        console.log('local Areas', unsyncedAreas);
+        return;
+      } else {
+        console.log('!!Online hai');
+        console.log('local Areas', unsyncedAreas);
+      }
 
       for (const area of unsyncedAreas) {
         try {
@@ -252,13 +258,15 @@ const SurveyFormApp = ({ navigation }) => {
             method: 'POST',
             headers: { 'Content-Type': 'application/json' },
             body: JSON.stringify({
-              name: area.name, // sirf name bhejna hai
+              areaName: area.name, // sirf name bhejna hai
             }),
           });
 
           if (res.ok) {
             area.isSynced = true;
           }
+
+          console.log('...Adding Area', area, res);
         } catch (err) {
           console.log('area sync failed:', area.name);
         }
@@ -275,6 +283,14 @@ const SurveyFormApp = ({ navigation }) => {
          */
         setAreas(result.data);
 
+        console.log(
+          'Online Update hone ke baaaD!!',
+          result.data.map(a => ({
+            ...a,
+            isSynced: true,
+          })),
+        );
+
         await AsyncStorage.setItem(
           'cached_areas',
           JSON.stringify(
@@ -286,10 +302,8 @@ const SurveyFormApp = ({ navigation }) => {
         );
       }
     } catch (e) {
-      const cached = await AsyncStorage.getItem('cached_areas');
-      if (cached) {
-        setAreas(JSON.parse(cached));
-      }
+      loadCachedMetadata();
+      console.log(e);
     }
   };
 
@@ -325,7 +339,6 @@ const SurveyFormApp = ({ navigation }) => {
      ======================= */
   useEffect(() => {
     fetchUser();
-    fetchMetadata();
 
     db.transaction(tx => {
       tx.executeSql(
@@ -341,6 +354,14 @@ const SurveyFormApp = ({ navigation }) => {
 
     initWorkAndSerial();
   }, []);
+
+  useEffect(() => {
+    const unsubscribe = navigation.addListener('focus', () => {
+      fetchMetadata();
+    });
+
+    return unsubscribe;
+  }, [navigation]);
 
   /* =======================
      2️⃣ MASTER INIT FLOW
@@ -363,8 +384,12 @@ const SurveyFormApp = ({ navigation }) => {
       // =====================
       // 🌐 ONLINE MODE
       // =====================
+
+      console.log(net.isConnected);
       if (net.isConnected) {
         try {
+          console.log(`${BASE_URL}/api/work/${user_data.id}`);
+
           const res = await fetch(`${BASE_URL}/api/work/${user_data.id}`, {
             method: 'GET',
             headers: {
@@ -375,6 +400,7 @@ const SurveyFormApp = ({ navigation }) => {
             },
           });
 
+          console.log(res);
           const data = await res.json();
           console.log('work api data', data);
 
@@ -513,6 +539,8 @@ const SurveyFormApp = ({ navigation }) => {
       if (data?.length) {
         const last = Number(data[data.length - 1][0]);
         return last + 1;
+      } else {
+        return 1;
       }
     } catch (e) {
       console.log('Online index error', e);
