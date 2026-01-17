@@ -34,7 +34,12 @@ const AppNavigator = () => {
   const logoutUser = async () => {
     await AsyncStorage.removeItem('userToken');
     db.transaction(tx => {
-      tx.executeSql('DELETE FROM surveys');
+      tx.executeSql('DROP TABLE IF EXISTS surveys', [], () => {
+        Alert.alert(
+          'All Data Cleared!',
+          'Removed all Local Data Successfully! You can Login again.',
+        );
+      });
     });
 
     await AsyncStorage.multiRemove([

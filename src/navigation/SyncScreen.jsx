@@ -15,29 +15,32 @@ import { useFocusEffect } from '@react-navigation/native';
 import NetInfo from '@react-native-community/netinfo';
 import SQLite from 'react-native-sqlite-storage';
 import BASE_URL from '../../config';
+import AsyncStorage from '@react-native-async-storage/async-storage';
+// import { Icon } from 'react-native-vector-icons/Icon';
 
 const db = SQLite.openDatabase({
   name: 'SurveyOffline.db',
   location: 'default',
 });
 
-const SyncScreen = () => {
+const SyncScreen = ({ navigation }) => {
   const [pendingList, setPendingList] = useState([]);
   const [loading, setLoading] = useState(false);
   const [dataLoading, setDataLoading] = useState(true);
 
   const COL_WIDTHS = {
-    srNo: 50,
+    srNo: 40,
     owner: 140,
     area: 120,
-    propNo: 100,
+    propNo: 50,
     desc: 180,
-    bp: 60,
-    mobile: 110,
+    bp: 30,
+    mobile: 100,
     category: 120,
-    tap: 60,
-    toilet: 70,
-    status: 100, // Sync Status
+    tap: 40,
+    toilet: 40,
+    status: 80, // Sync Status
+    action: 130,
   };
 
   // 🔄 Load data whenever screen comes into focus
@@ -81,105 +84,189 @@ const SyncScreen = () => {
   };
 
   const startSync = async () => {
-    const net = await NetInfo.fetch();
-    if (!net.isConnected) {
-      Alert.alert('Error', 'સિંક કરવા માટે ઇન્ટરનેટ જરૂરી છે!');
-      return;
-    }
+    Alert.alert(
+      'Confirm Sync',
+      'શું તમે ડેટા ઓનલાઇન અપલોડ કરવા માંગો છો?',
+      [
+        {
+          text: 'Cancel',
+          style: 'cancel',
+        },
+        {
+          text: 'Sync',
+          onPress: async () => {
+            const net = await NetInfo.fetch();
+            if (!net.isConnected) {
+              Alert.alert('Error', 'સિંક કરવા માટે ઇન્ટરનેટ જરૂરી છે!');
+              return;
+            }
 
-    // Filter only unsynced records
-    const recordsToSync = pendingList
-      .filter(item => item.isSynced === 0)
-      .sort(
-        (a, b) =>
-          Number(a.formData.serialNumber) - Number(b.formData.serialNumber),
-      );
+            // Filter only unsynced records
+            const recordsToSync = pendingList
+              .filter(item => item.isSynced === 0)
+              .sort(
+                (a, b) =>
+                  Number(a.formData.serialNumber) -
+                  Number(b.formData.serialNumber),
+              );
 
-    if (recordsToSync.length === 0) {
-      Alert.alert('Info', 'બધો ડેટા પહેલેથી જ સિંક થયેલો છે.');
-      return;
-    }
+            if (recordsToSync.length === 0) {
+              Alert.alert('Info', 'બધો ડેટા પહેલેથી જ સિંક થયેલો છે.');
+              return;
+            }
 
-    setLoading(true);
+            setLoading(true);
 
-    try {
-      const payload = recordsToSync.map(item => ({
-        ...item.formData,
-        floors: item.floors,
-      }));
+            try {
+              const payload = recordsToSync.map(item => ({
+                ...item.formData,
+                description: item.description,
+                floors: item.floors,
+              }));
 
-      // console.log('Uploading Payload:', JSON.stringify(payload));
+              // console.log('Uploading Payload:', JSON.stringify(payload));
 
-      const res = await fetch(`${BASE_URL}/api/sheet/sync`, {
-        method: 'POST',
-        headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify(payload),
-      });
+              const workId = await AsyncStorage.getItem('WORK_ID');
 
-      const result = await res.json(); // Assuming backend returns JSON
+              if (!workId) {
+                Alert.alert('Please Refresh the app after login!');
+                return;
+              }
 
-      if (res.status === 200 || res.ok) {
-        // Update local DB status to Synced (1)
-        db.transaction(
-          tx => {
-            recordsToSync.forEach(item => {
-              tx.executeSql('UPDATE surveys SET isSynced = 1 WHERE id = ?', [
-                item.id,
-              ]);
-            });
+              const res = await fetch(`${BASE_URL}/api/sheet/sync`, {
+                method: 'POST',
+                headers: { 'Content-Type': 'application/json' },
+                body: JSON.stringify({ payload, workId }),
+              });
+
+              const result = await res.json(); // Assuming backend returns JSON
+
+              console.log(result);
+
+              if (res.status === 200 || res.ok) {
+                // Update local DB status to Synced (1)
+                db.transaction(
+                  tx => {
+                    recordsToSync.forEach(item => {
+                      tx.executeSql(
+                        'UPDATE surveys SET isSynced = 1 WHERE id = ?',
+                        [item.id],
+                      );
+                    });
+                  },
+                  error => console.log('Transaction Error', error),
+                  () => {
+                    // Transaction Success
+                    setLoading(false);
+                    loadPendingEntries(); // Refresh UI
+                    Alert.alert(
+                      'Success ✅',
+                      `${recordsToSync.length} રેકોર્ડ્સ સફળતાપૂર્વક અપલોડ થયા!`,
+                    );
+                  },
+                );
+              } else {
+                throw new Error(result?.message || 'Server returned error');
+              }
+            } catch (err) {
+              console.log('Sync failed!!:', err);
+              setLoading(false);
+              Alert.alert(
+                'Sync Failed ❌',
+                'કનેક્શન એરર અથવા સર્વર પ્રોબ્લેમ.',
+              );
+            }
           },
-          error => console.log('Transaction Error', error),
-          () => {
-            // Transaction Success
-            setLoading(false);
-            loadPendingEntries(); // Refresh UI
-            Alert.alert(
-              'Success ✅',
-              `${recordsToSync.length} રેકોર્ડ્સ સફળતાપૂર્વક અપલોડ થયા!`,
-            );
-          },
-        );
-      } else {
-        throw new Error(result?.message || 'Server returned error');
-      }
-    } catch (err) {
-      console.log('Sync failed!!:', err);
-      setLoading(false);
-      Alert.alert('Sync Failed ❌', 'કનેક્શન એરર અથવા સર્વર પ્રોબ્લેમ.');
-    }
+        },
+      ],
+      { cancelable: true },
+    );
   };
 
-  // for (let item of pendingList) {
-  //   if (item.isSynced) continue;
+  const deleteRecord = itemToDelete => {
+    const { id: deletedId, formData: rawData } = itemToDelete;
+    let deletedData;
+    try {
+      // Check karein: Agar string hai toh parse karein, varna direct use karein
+      deletedData = typeof rawData === 'string' ? JSON.parse(rawData) : rawData;
+    } catch (e) {
+      console.error('Initial Parse Error:', e);
+      Alert.alert('Error While Deleting Record', `${e.toString()}`);
+      return;
+    }
 
-  //   try {
-  //     const payload = {
-  //       ...item.formData,
-  //       floors: item.floors,
-  //     };
+    Alert.alert(
+      'Confirm Delete',
+      `Are you Sure to Delete Record ${deletedData?.serialNumber}`,
+      [
+        { text: 'Cancel', style: 'cancel' },
+        {
+          text: 'Delete',
+          style: 'destructive',
+          onPress: () => {
+            db.transaction(tx => {
+              // 1. Pehle Record Delete karo
+              tx.executeSql(
+                'DELETE FROM surveys WHERE id = ?',
+                [deletedId],
+                () => {
+                  // 2. Sirf un records ko rearrange karo jo synced nahi hain
+                  // aur jinki ID delete hone wali ID se badi hai
+                  reorderSequences(
+                    deletedId,
+                    deletedData.serialNumber,
+                    deletedData.propertyNumber,
+                  );
+                },
+                (_, err) => console.log('Delete Error', err),
+              );
+            });
+          },
+        },
+      ],
+    );
+  };
 
-  //     console.log(payload);
+  const reorderSequences = (afterId, lastSerial, lastProp) => {
+    db.transaction(tx => {
+      // 3. Fetch ONLY unsynced records that came AFTER the deleted one
+      tx.executeSql(
+        'SELECT id, formData FROM surveys WHERE id > ? AND isSynced = 0 ORDER BY id ASC',
+        [afterId],
+        (_, { rows }) => {
+          let currentSerial = Number(lastSerial);
+          let currentProp = Number(lastProp);
 
-  //     const res = await fetch(`${BASE_URL}/api/sheet/sync`, {
-  //       method: 'POST',
-  //       headers: { 'Content-Type': 'application/json' },
-  //       body: JSON.stringify(payload),
-  //     });
+          for (let i = 0; i < rows.length; i++) {
+            const item = rows.item(i);
+            let data = JSON.parse(item.formData);
 
-  //     if (res?.data?.success) {
-  //       db.transaction(tx => {
-  //         tx.executeSql('UPDATE surveys SET isSynced = 1 WHERE id = ?', [
-  //           item.id,
-  //         ]);
-  //       });
-  //       return;
-  //     }
+            // Purane Serial/Prop se sequence aage badhao
+            const newSerialStr = currentSerial.toString();
+            const newPropStr = currentProp.toString();
 
-  //     throw new Error(res?.data?.message || 'Sync failed');
-  //   } catch (err) {
-  //     console.log('Sync failed for ID:', item.id, err);
-  //   }
-  // }
+            data.serialNumber = newSerialStr;
+            data.propertyNumber = newPropStr;
+
+            // Update record
+            tx.executeSql('UPDATE surveys SET formData = ? WHERE id = ?', [
+              JSON.stringify(data),
+              item.id,
+            ]);
+
+            // Agle record ke liye numbers increment karo
+            currentSerial++;
+            currentProp++;
+          }
+
+          AsyncStorage.setItem('NEXT_SERIAL', currentSerial.toString());
+
+          // UI Refresh
+          loadPendingEntries();
+        },
+      );
+    });
+  };
 
   const renderHeader = () => (
     <View>
@@ -196,6 +283,7 @@ const SyncScreen = () => {
         <HeaderCell width={COL_WIDTHS.tap} title="નળ" />
         <HeaderCell width={COL_WIDTHS.toilet} title="શૌચાલય" />
         <HeaderCell width={COL_WIDTHS.status} title="Status" />
+        <HeaderCell width={COL_WIDTHS.action} title="Edit" />
       </View>
 
       {/* Blue Strip (Web Style) */}
@@ -211,6 +299,7 @@ const SyncScreen = () => {
 
   const renderItem = ({ item, index }) => {
     const f = item.formData;
+    f.description = item.description;
     const isSynced = item.isSynced === 1;
 
     // Disabled Style Logic
@@ -226,13 +315,12 @@ const SyncScreen = () => {
         <Cell width={COL_WIDTHS.owner} value={f.ownerName} />
         <Cell width={COL_WIDTHS.area} value={f.areaName} />
         <Cell width={COL_WIDTHS.propNo} value={f.propertyNumber} />
-        <Cell width={COL_WIDTHS.desc} value={f.propertyNameOnRecord} />
+        <Cell width={COL_WIDTHS.desc} value={f.description} />
         <Cell width={COL_WIDTHS.bp} value={f.bp ? 'હા' : '-'} centered />
         <Cell width={COL_WIDTHS.mobile} value={f.mobileNumber} />
         <Cell width={COL_WIDTHS.category} value={f.houseCategory} />
         <Cell width={COL_WIDTHS.tap} value={f.tapCount} centered />
         <Cell width={COL_WIDTHS.toilet} value={f.toiletCount} centered />
-
         {/* Status Badge */}
         <View
           style={[
@@ -250,6 +338,54 @@ const SyncScreen = () => {
             </View>
           )}
         </View>
+
+        {isSynced ? null : (
+          <>
+            <TouchableOpacity
+              style={[
+                styles.cell,
+                {
+                  width: 50,
+                  alignItems: 'center',
+                  justifyContent: 'center',
+                  backgroundColor: '#3b82f6',
+                  borderRadius: 4,
+                  padding: 4,
+                  marginRight: 2,
+                },
+              ]}
+              onPress={() => {
+                navigation.navigate('Dashboard', {
+                  editMode: true,
+                  record: item,
+                });
+              }}
+            >
+              {/* <Icon name="pencil" size={20} color="#3b82f6" /> */}
+              <Text style={{ color: 'white' }}>Edit</Text>
+            </TouchableOpacity>
+
+            <TouchableOpacity
+              style={[
+                styles.cell,
+                {
+                  width: 60,
+                  alignItems: 'center',
+                  justifyContent: 'center',
+                  backgroundColor: '#f63b3bff',
+                  borderRadius: 4,
+                  padding: 4,
+                },
+              ]}
+              onPress={() => {
+                deleteRecord(item);
+              }}
+            >
+              {/* <Icon name="pencil" size={20} color="#3b82f6" /> */}
+              <Text style={{ color: 'white' }}>Delete</Text>
+            </TouchableOpacity>
+          </>
+        )}
       </View>
     );
   };
@@ -275,26 +411,31 @@ const SyncScreen = () => {
           <ActivityIndicator size="large" color="#3b82f6" />
         </View>
       ) : (
-        <ScrollView horizontal showsHorizontalScrollIndicator={true}>
-          <View>
-            {renderHeader()}
-            <FlatList
-              data={pendingList}
-              keyExtractor={item => item.id.toString()}
-              renderItem={renderItem}
-              contentContainerStyle={{ paddingBottom: 100 }}
-              scrollEnabled={false} // Use parent ScrollView
-              ListEmptyComponent={
-                <View
-                  style={{ padding: 20, width: Dimensions.get('window').width }}
-                >
-                  <Text style={{ textAlign: 'center', color: '#666' }}>
-                    કોઈ ઑફલાઇન રેકોર્ડ મળ્યો નથી.
-                  </Text>
-                </View>
-              }
-            />
-          </View>
+        <ScrollView style={{ flex: 1 }}>
+          <ScrollView horizontal showsHorizontalScrollIndicator={true}>
+            <View>
+              {renderHeader()}
+              <FlatList
+                data={pendingList}
+                keyExtractor={item => item.id.toString()}
+                renderItem={renderItem}
+                contentContainerStyle={{ paddingBottom: 100 }}
+                scrollEnabled={false} // Use parent ScrollView
+                ListEmptyComponent={
+                  <View
+                    style={{
+                      padding: 20,
+                      width: Dimensions.get('window').width,
+                    }}
+                  >
+                    <Text style={{ textAlign: 'center', color: '#666' }}>
+                      કોઈ ઑફલાઇન રેકોર્ડ મળ્યો નથી.
+                    </Text>
+                  </View>
+                }
+              />
+            </View>
+          </ScrollView>
         </ScrollView>
       )}
 

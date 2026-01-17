@@ -19,6 +19,7 @@ import Icon from 'react-native-vector-icons/MaterialCommunityIcons';
 import BASE_URL from '../../config';
 
 import Svg, { Path } from 'react-native-svg';
+import BuildDescription from '../../components/BuildDescription';
 
 // --- 1. Custom Dropdown Component (No Library Needed) ---
 const CustomDropdown = ({ value, options, onSelect, placeholder, label }) => {
@@ -108,7 +109,40 @@ const db = SQLite.openDatabase(
   err => console.log('DB Error', err),
 );
 
-const SurveyFormApp = ({ navigation }) => {
+const SurveyFormApp = ({ navigation, route }) => {
+  const [description, setDescription] = useState('');
+  const [editId, setEditId] = useState(null);
+
+  useEffect(() => {
+    if (route.params?.editMode && route.params?.record) {
+      const { record } = route.params;
+
+      // Parse strings back to objects if they are strings
+      const parsedFormData =
+        typeof record.formData === 'string'
+          ? JSON.parse(record.formData)
+          : record.formData;
+
+      const parsedFloors =
+        typeof record.floors === 'string'
+          ? JSON.parse(record.floors)
+          : record.floors;
+
+      // Set State
+      setFormData(parsedFormData);
+      setFloors(parsedFloors);
+      setEditId(record.id); // Important: Store the SQLite ID
+
+      // Update description immediately based on loaded data
+      setDescription(BuildDescription(parsedFormData, parsedFloors));
+
+      // Optional: Change title dynamically
+      navigation.setOptions({
+        title: `Edit Serial: ${parsedFormData.serialNumber}`,
+      });
+    }
+  }, [route.params]);
+
   // --- Initial States ---
   const initialFormState = {
     serialNumber: '',
@@ -119,11 +153,11 @@ const SurveyFormApp = ({ navigation }) => {
     mobileNumber: '',
     propertyNameOnRecord: '',
     houseCategory: '',
-    kitchenCount: '0',
-    bathroomCount: '0',
-    verandaCount: '0',
-    tapCount: '0',
-    toiletCount: '0',
+    kitchenCount: '',
+    bathroomCount: '',
+    verandaCount: '',
+    tapCount: '',
+    toiletCount: '',
     remarks: '',
     bp: false,
     landArea: false,
@@ -170,7 +204,9 @@ const SurveyFormApp = ({ navigation }) => {
     'સરકારી મિલ્ક્ત',
     'પ્રાઈવેટ - સંસ્થાઓ',
     'પ્લોટ ખાનગી - ખુલ્લી જગ્યા',
+    'પ્લોટ (ફરતી દિવાલ) ખાનગી',
     'પ્લોટ સરકારી - કોમનપ્લોટ',
+    'પ્લોટ (ફરતી દિવાલ) સરકારી',
     'કારખાના - ઇન્ડસ્ટ્રીજ઼',
     'ટ્રસ્ટ મિલ્કત / NGO',
     'મંડળી - સેવા સહકારી મંડળી',
@@ -204,6 +240,10 @@ const SurveyFormApp = ({ navigation }) => {
     });
   }
 
+  useEffect(() => {
+    setDescription(BuildDescription(formData, floors));
+  }, [formData, floors]);
+
   // --- Lifecycle & Data Fetching ---
   // useEffect(() => {
   //   fetchUser();
@@ -228,8 +268,55 @@ const SurveyFormApp = ({ navigation }) => {
   //   return () => unsubscribe();
   // }, []);
 
+  async function getWorkId() {
+    const workId = await AsyncStorage.getItem(WORK_ID_KEY);
+
+    if (workId !== null) {
+      return workId;
+    }
+
+    try {
+      const userDataStr = await AsyncStorage.getItem('user');
+      const user_data = JSON.parse(userDataStr);
+
+      const res = await fetch(`${BASE_URL}/api/work/${user_data.id}`, {
+        method: 'GET',
+        headers: {
+          'Content-Type': 'application/json',
+          Authorization: `Bearer ${await AsyncStorage.getItem('userToken')}`,
+        },
+      });
+
+      console.log(res);
+      const data = await res.json();
+      console.log('work api data', data);
+
+      if (data?.nalla) {
+        await clearAllLocalData();
+        setWorkSpot({});
+        return;
+      }
+
+      const onlineWorkId = data?.work?._id || '';
+
+      console.log('Dekho toh yeh! ', onlineWorkId);
+
+      return onlineWorkId;
+    } catch (err) {
+      console.log('Online work fetch failed', err);
+
+      return null;
+    }
+  }
+
   const fetchMetadata = async () => {
     try {
+      let workId = await getWorkId();
+
+      if (!workId) {
+        Alert.alert('Reload the app and try again!');
+      }
+
       // 1️⃣ Local storage se uthao
       const localRaw = await AsyncStorage.getItem('cached_areas');
       let localAreas = localRaw ? JSON.parse(localRaw) : [];
@@ -259,6 +346,7 @@ const SurveyFormApp = ({ navigation }) => {
             headers: { 'Content-Type': 'application/json' },
             body: JSON.stringify({
               areaName: area.name, // sirf name bhejna hai
+              workId,
             }),
           });
 
@@ -273,7 +361,9 @@ const SurveyFormApp = ({ navigation }) => {
       }
 
       // 3️⃣ Ab server se final truth lao
-      const response = await fetch(`${BASE_URL}/api/sheet/areas`);
+      const response = await fetch(
+        `${BASE_URL}/api/sheet/areas?workId=${workId}`,
+      );
       const result = await response.json();
 
       if (Array.isArray(result?.data)) {
@@ -346,6 +436,7 @@ const SurveyFormApp = ({ navigation }) => {
           id INTEGER PRIMARY KEY AUTOINCREMENT,
           formData TEXT,
           floors TEXT,
+          description TEXT,
           isSynced INTEGER DEFAULT 0,
           createdAt TEXT
         )`,
@@ -357,16 +448,75 @@ const SurveyFormApp = ({ navigation }) => {
 
   useEffect(() => {
     const unsubscribe = navigation.addListener('focus', () => {
-      fetchMetadata();
+      if (!route.params?.editMode) {
+        // Clear ID to ensure we are in "Create Mode"
+        setEditId(null);
+        setFormData(initialFormState);
+        setFloors([
+          {
+            floorType: '',
+            roomDetails: [
+              {
+                type: '',
+                roomHallShopGodown: '',
+                slabRooms: '',
+                tinRooms: '',
+                woodenRooms: '',
+                tileRooms: '',
+              },
+            ],
+          },
+        ]);
+
+        // Load standard metadata
+        initWorkAndSerial();
+        fetchMetadata();
+      }
     });
 
     return unsubscribe;
-  }, [navigation]);
+  }, [navigation, route.params]);
+
+  useEffect(() => {
+    if (editId === null) {
+      initWorkAndSerial();
+    }
+  }, [editId]);
 
   /* =======================
      2️⃣ MASTER INIT FLOW
      ======================= */
   const initWorkAndSerial = async () => {
+    if (editId !== null) return;
+
+    db.transaction(tx => {
+      // 1. Sabse pehle latest record uthayenge (ID ke hisaab se desc)
+      tx.executeSql(
+        'SELECT formData FROM surveys ORDER BY id DESC LIMIT 1',
+        [],
+        (_, { rows }) => {
+          if (rows.length > 0) {
+            try {
+              // 2. SQL se aane wali JSON string ko parse karein
+              const lastEntry = JSON.parse(rows.item(0).formData);
+
+              const lastArea = lastEntry.areaName || '';
+
+              setFormData(prev => ({
+                ...prev,
+                areaName: lastArea,
+              }));
+            } catch (e) {
+              console.error('JSON parsing error in initWorkandSerial', e);
+            }
+          }
+        },
+        error => {
+          console.log('SQL Error in initWorkandSerial', error);
+        },
+      );
+    });
+
     try {
       const userDataStr = await AsyncStorage.getItem('user');
       if (!userDataStr) return;
@@ -388,8 +538,6 @@ const SurveyFormApp = ({ navigation }) => {
       console.log(net.isConnected);
       if (net.isConnected) {
         try {
-          console.log(`${BASE_URL}/api/work/${user_data.id}`);
-
           const res = await fetch(`${BASE_URL}/api/work/${user_data.id}`, {
             method: 'GET',
             headers: {
@@ -532,7 +680,16 @@ const SurveyFormApp = ({ navigation }) => {
      ======================= */
   const fetchOnlineIndex = async () => {
     try {
-      const res = await fetch(`${BASE_URL}/api/sheet`);
+      const fetchedWorkId = await AsyncStorage.getItem(WORK_ID_KEY);
+
+      console.log('YE hai work id ', fetchedWorkId);
+
+      if (!fetchedWorkId) {
+        Alert.alert('Please Refresh the app after login!');
+        return;
+      }
+
+      const res = await fetch(`${BASE_URL}/api/sheet?workId=${fetchedWorkId}`);
       const json = await res.json();
       const data = json?.data;
 
@@ -587,6 +744,75 @@ const SurveyFormApp = ({ navigation }) => {
   // --- Change Handlers ---
   const handleChange = (name, value) => {
     let processedValue = value;
+
+    if (name === 'houseCategory') {
+      if (value === 'પ્લોટ ખાનગી - ખુલ્લી જગ્યા') {
+        setFloors([
+          {
+            floorType: 'પ્લોટ',
+            roomDetails: [
+              {
+                type: 'પ્લોટ',
+                roomHallShopGodown: 'પ્લોટ ખાનગી - ખુલ્લી જગ્યા',
+                slabRooms: '',
+                tinRooms: '',
+                woodenRooms: '',
+                tileRooms: '',
+              },
+            ],
+          },
+        ]);
+      } else if (value === 'પ્લોટ સરકારી - કોમનપ્લોટ') {
+        setFloors([
+          {
+            floorType: 'પ્લોટ',
+            roomDetails: [
+              {
+                type: 'પ્લોટ',
+                roomHallShopGodown: 'પ્લોટ સરકારી - કોમનપ્લોટ',
+                slabRooms: '',
+                tinRooms: '',
+                woodenRooms: '',
+                tileRooms: '',
+              },
+            ],
+          },
+        ]);
+      } else if (value === 'પ્લોટ (ફરતી દિવાલ) ખાનગી') {
+        setFloors([
+          {
+            floorType: 'પ્લોટ',
+            roomDetails: [
+              {
+                type: 'પ્લોટ',
+                roomHallShopGodown: 'પ્લોટ (ફરતી દિવાલ) ખાનગી',
+                slabRooms: '',
+                tinRooms: '',
+                woodenRooms: '',
+                tileRooms: '',
+              },
+            ],
+          },
+        ]);
+      } else if (value === 'પ્લોટ (ફરતી દિવાલ) સરકારી') {
+        setFloors([
+          {
+            floorType: 'પ્લોટ',
+            roomDetails: [
+              {
+                type: 'પ્લોટ',
+                roomHallShopGodown: 'પ્લોટ (ફરતી દિવાલ) સરકારી',
+                slabRooms: '',
+                tinRooms: '',
+                woodenRooms: '',
+                tileRooms: '',
+              },
+            ],
+          },
+        ]);
+      }
+    }
+
     if (
       name !== 'ownerName' &&
       name !== 'remarks' &&
@@ -607,6 +833,7 @@ const SurveyFormApp = ({ navigation }) => {
       } else {
         setFloors(floors.filter(f => f.floorType !== 'ફળિયું'));
       }
+
       setFormData(prev => ({ ...prev, landArea: value }));
       return;
     }
@@ -725,6 +952,7 @@ const SurveyFormApp = ({ navigation }) => {
 
   // --- Data Options for Dropdowns ---
   const floorOptions = [
+    // { label: 'પ્લોટ', value: 'પ્લોટ' },
     { label: 'ગ્રાઉન્ડ ફ્લોર', value: 'ગ્રાઉન્ડ ફ્લોર' },
     { label: 'પ્રથમ માળ', value: 'પ્રથમ માળ' },
     { label: 'બીજો માળ', value: 'બીજો માળ' },
@@ -736,7 +964,7 @@ const SurveyFormApp = ({ navigation }) => {
   const typeOptions = [
     { label: 'પાકા', value: 'પાકા' },
     { label: 'કાચા', value: 'કાચા' },
-    { label: 'પ્લોટ', value: 'પ્લોટ' },
+    // { label: 'પ્લોટ', value: 'પ્લોટ' },
   ];
 
   const roomTypeOptions = [
@@ -752,7 +980,11 @@ const SurveyFormApp = ({ navigation }) => {
     { label: 'પાળું', value: 'પાળું' },
     { label: 'શેડ નાના પતરાવાળા', value: 'શેડ નાના પતરાવાળા' },
     { label: 'શેડ મોટા પતરાવાળા', value: 'શેડ મોટા પતરાવાળા' },
-    { label: 'પ્લોટ', value: 'પ્લોટ' },
+    // {
+    //   label: 'પ્લોટ ખાનગી - ખુલ્લી જગ્યા',
+    //   value: 'પ્લોટ ખાનગી - ખુલ્લી જગ્યા',
+    // },
+    // { label: 'પ્લોટ સરકારી - કોમનપ્લોટ', value: 'પ્લોટ સરકારી - કોમનપ્લોટ' },
   ];
 
   // --- Icons ---
@@ -792,15 +1024,15 @@ const SurveyFormApp = ({ navigation }) => {
       ...formData,
       survayor: { id: user?.id, name: user?.name, time: new Date() },
     };
-    console.log(finalData);
 
     db.transaction(
       tx => {
         tx.executeSql(
-          'INSERT INTO surveys (formData, floors, isSynced, createdAt) VALUES (?, ?, ?, ?)',
+          'INSERT INTO surveys (formData, floors, description, isSynced, createdAt) VALUES (?, ?, ?, ?, ?)',
           [
             JSON.stringify(finalData),
             JSON.stringify(floors ?? []),
+            description || '',
             0,
             new Date().toISOString(),
           ],
@@ -809,7 +1041,21 @@ const SurveyFormApp = ({ navigation }) => {
             console.log('INSERT OK', res);
 
             setFormData(initialFormState);
-            setFloors(initialFloorsState);
+            setFloors([
+              {
+                floorType: '',
+                roomDetails: [
+                  {
+                    type: '',
+                    roomHallShopGodown: '',
+                    slabRooms: '',
+                    tinRooms: '',
+                    woodenRooms: '',
+                    tileRooms: '',
+                  },
+                ],
+              },
+            ]);
 
             await AsyncStorage.setItem(
               NEXT_SERIAL_KEY,
@@ -840,11 +1086,58 @@ const SurveyFormApp = ({ navigation }) => {
     );
   };
 
+  const handleUpdate = async () => {
+    if (editId) {
+      // ===========================
+      // 🛠 UPDATE EXISTING RECORD
+      // ===========================
+
+      const finalData = {
+        ...formData,
+        survayor: { id: user?.id, name: user?.name, time: new Date() },
+      };
+
+      db.transaction(tx => {
+        tx.executeSql(
+          `UPDATE surveys 
+         SET formData = ?, 
+             floors = ?, 
+             description = ?, 
+             isSynced = 0,    -- Reset sync status so it uploads again
+             createdAt = ?    -- Optional: Update timestamp
+         WHERE id = ?`,
+          [
+            JSON.stringify(finalData),
+            JSON.stringify(floors ?? []),
+            description || '',
+            new Date().toISOString(),
+            editId,
+          ],
+          (_, res) => {
+            Alert.alert('Success ✅', 'Record Updated Successfully');
+            setEditId(null);
+            setFloors(initialFloorsState);
+            setFormData(initialFormState);
+            initWorkAndSerial();
+
+            navigation.navigate('Report');
+          },
+          (_, err) => {
+            console.log('UPDATE ERROR', err);
+            Alert.alert('Update Failed', err.message);
+          },
+        );
+      });
+    }
+  };
+
   return (
     <ScrollView style={styles.container}>
       {/* Header */}
       <View style={styles.headerCard}>
-        <Text style={styles.mainTitle}>સર્વે ફોર્મ</Text>
+        <Text style={styles.mainTitle}>
+          {editId ? `Edit Serial: ${editId}` : 'સર્વે ફોર્મ'}
+        </Text>
         {/* <View
           style={[
             styles.statusBadge,
@@ -874,11 +1167,16 @@ const SurveyFormApp = ({ navigation }) => {
         <View style={styles.row}>
           <View style={{ flex: 1 }}>
             <Text style={styles.label}>1. અનું ક્રમાંક</Text>
-            <TextInput
-              style={[styles.input, styles.disabledInput]}
-              value={formData.serialNumber}
-              editable={false}
-            />
+
+            {formData.serialNumber !== '' ? (
+              <TextInput
+                style={[styles.input, styles.disabledInput]}
+                value={formData.serialNumber}
+                editable={false}
+              />
+            ) : (
+              <ActivityIndicator size="small" color="#3b82f6" />
+            )}
           </View>
           <View style={{ flex: 1, marginLeft: 10 }}>
             <Text style={styles.label}>3. મિલ્કત ક્રમાંક</Text>
@@ -934,7 +1232,7 @@ const SurveyFormApp = ({ navigation }) => {
               />
 
               <FlatList
-                data={areas?.filter(a => a.name.includes(searchArea))}
+                data={areas?.filter(a => a.name.includes(searchArea)).reverse()}
                 keyExtractor={item => item.id.toString()}
                 renderItem={({ item }) => (
                   <TouchableOpacity
@@ -1066,7 +1364,8 @@ const SurveyFormApp = ({ navigation }) => {
 
       <View style={floorstyles.floorsContainer}>
         {floors.map((floor, floorIndex) =>
-          floor.floorType === 'ફળિયું' ? null : (
+          floor.floorType === 'ફળિયું' ? null : floor.floorType ===
+            'પ્લોટ' ? null : (
             <View key={floorIndex} style={floorstyles.floorSection}>
               {/* Floor Header */}
               <View style={floorstyles.headerRow}>
@@ -1187,10 +1486,15 @@ const SurveyFormApp = ({ navigation }) => {
         )}
 
         {/* Add Floor Button */}
-        <TouchableOpacity onPress={addFloor} style={floorstyles.addFloorButton}>
-          <PlusIcon />
-          <Text style={floorstyles.addFloorText}>વધુ માળ ઉમેરો</Text>
-        </TouchableOpacity>
+        {floors[0].floorType === 'પ્લોટ' ? null : (
+          <TouchableOpacity
+            onPress={addFloor}
+            style={floorstyles.addFloorButton}
+          >
+            <PlusIcon />
+            <Text style={floorstyles.addFloorText}>વધુ માળ ઉમેરો</Text>
+          </TouchableOpacity>
+        )}
       </View>
 
       {/* Checkboxes */}
@@ -1200,13 +1504,6 @@ const SurveyFormApp = ({ navigation }) => {
           <Switch
             value={formData.landArea}
             onValueChange={v => handleChange('landArea', v)}
-          />
-        </View>
-        <View style={[styles.rowBetween, { marginTop: 10 }]}>
-          <Text style={styles.label}>11. બિ.પ.</Text>
-          <Switch
-            value={formData.bp}
-            onValueChange={v => handleChange('bp', v)}
           />
         </View>
       </View>
@@ -1219,6 +1516,7 @@ const SurveyFormApp = ({ navigation }) => {
             style={styles.countInput}
             keyboardType="numeric"
             onChangeText={v => handleChange('kitchenCount', v)}
+            value={formData.kitchenCount}
           />
         </View>
 
@@ -1228,6 +1526,7 @@ const SurveyFormApp = ({ navigation }) => {
             style={styles.countInput}
             keyboardType="numeric"
             onChangeText={v => handleChange('bathroomCount', v)}
+            value={formData.bathroomCount}
           />
         </View>
 
@@ -1237,6 +1536,7 @@ const SurveyFormApp = ({ navigation }) => {
             style={styles.countInput}
             keyboardType="numeric"
             onChangeText={v => handleChange('verandaCount', v)}
+            value={formData.verandaCount}
           />
         </View>
 
@@ -1246,6 +1546,7 @@ const SurveyFormApp = ({ navigation }) => {
             style={styles.countInput}
             keyboardType="numeric"
             onChangeText={v => handleChange('tapCount', v)}
+            value={formData.tapCount}
           />
         </View>
 
@@ -1255,8 +1556,20 @@ const SurveyFormApp = ({ navigation }) => {
             style={styles.countInput}
             keyboardType="numeric"
             onChangeText={v => handleChange('toiletCount', v)}
+            value={formData.toiletCount}
           />
         </View>
+      </View>
+
+      {/* description */}
+      <View style={styles.card}>
+        <Text style={styles.label}>વર્ણન</Text>
+        <TextInput
+          style={styles.input}
+          multiline
+          onChangeText={v => setDescription(v)}
+          value={description}
+        />
       </View>
 
       {/* Remarks */}
@@ -1271,10 +1584,45 @@ const SurveyFormApp = ({ navigation }) => {
         />
       </View>
 
+      <View style={styles.card}>
+        <View style={[styles.rowBetween, { marginTop: 10 }]}>
+          <Text style={styles.label}>11. બિ.પ.</Text>
+          <Switch
+            value={formData.bp}
+            onValueChange={v => handleChange('bp', v)}
+          />
+        </View>
+      </View>
+
       {/* Submit */}
-      <TouchableOpacity style={styles.submitBtn} onPress={handleSave}>
-        <Text style={styles.submitBtnText}>સેવ કરો (Offline Save)</Text>
-      </TouchableOpacity>
+      {editId ? (
+        <View style={styles.buttonRow}>
+          {/* CANCEL BUTTON */}
+          <TouchableOpacity
+            style={[styles.actionButton, styles.cancelButton]}
+            onPress={() => {
+              setEditId(null);
+              setFloors(initialFloorsState);
+              setFormData(initialFormState);
+              initWorkAndSerial();
+            }}
+          >
+            <Text style={styles.buttonText}>Cancel ❌</Text>
+          </TouchableOpacity>
+
+          {/* SAVE BUTTON */}
+          <TouchableOpacity
+            style={[styles.actionButton, styles.saveButton]}
+            onPress={handleUpdate}
+          >
+            <Text style={styles.buttonText}>Update Record 📝</Text>
+          </TouchableOpacity>
+        </View>
+      ) : (
+        <TouchableOpacity style={styles.submitBtn} onPress={handleSave}>
+          <Text style={styles.submitBtnText}>સેવ કરો (Offline Save)</Text>
+        </TouchableOpacity>
+      )}
 
       <View style={{ height: 50 }} />
     </ScrollView>
@@ -1385,6 +1733,32 @@ const styles = StyleSheet.create({
     elevation: 4,
   },
   submitBtnText: { color: '#FFF', fontSize: 18, fontWeight: 'bold' },
+
+  buttonRow: {
+    flexDirection: 'column',
+    justifyContent: 'space-between',
+    gap: 10,
+    padding: 10,
+    marginBottom: 20, // Taki bottom se thoda upar rahe
+  },
+  actionButton: {
+    flex: 1, // Dono button barabar jagah lenge
+    padding: 15,
+    borderRadius: 8,
+    alignItems: 'center',
+    marginHorizontal: 5, // Beech mein gap ke liye
+  },
+  saveButton: {
+    backgroundColor: '#4CAF50', // Green color
+  },
+  cancelButton: {
+    backgroundColor: '#FF5252', // Red color
+  },
+  buttonText: {
+    color: '#fff',
+    fontWeight: 'bold',
+    fontSize: 16,
+  },
 });
 
 const modalStyles = StyleSheet.create({
